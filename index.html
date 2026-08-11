@@ -8,61 +8,61 @@
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
     <style>
         * { box-sizing: border-box; }
-        body {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            font-family: sans-serif;
-            background-color: #121212;
-            color: white;
+        body { 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+            font-family: sans-serif; 
+            background-color: #121212; 
+            color: white; 
             margin: 0;
             padding: 20px;
         }
         h2 { text-align: center; font-size: 1.5rem; }
-
+        
         /* Responsive container that shrinks to fit mobile screens but maxes out at 480px on desktop */
-        .container {
-            position: relative;
-            width: 100%;
-            max-width: 480px;
+        .container { 
+            position: relative; 
+            width: 100%; 
+            max-width: 480px; 
             aspect-ratio: 1 / 1; /* Keeps it a perfect square */
             margin-top: 10px;
         }
-
-        video { display: none; }
-
+        
+        video { display: none; } 
+        
         /* Canvas scales fluidly with the container */
-        canvas {
+        canvas { 
             width: 100%;
             height: 100%;
-            border: 4px solid #333;
-            border-radius: 50%;
-            object-fit: cover;
-            position: absolute;
-            top: 0;
-            left: 0;
-            transition: border-color 0.3s;
+            border: 4px solid #333; 
+            border-radius: 50%; 
+            object-fit: cover; 
+            position: absolute; 
+            top: 0; 
+            left: 0; 
+            transition: border-color 0.3s; 
         }
         .success-canvas { border-color: #4CAF50; }
-
-        #instructionText {
-            margin-top: 20px;
-            font-size: 1.1rem;
-            font-weight: bold;
-            text-align: center;
+        
+        #instructionText { 
+            margin-top: 20px; 
+            font-size: 1.1rem; 
+            font-weight: bold; 
+            text-align: center; 
             min-height: 30px;
             padding: 0 10px;
         }
-
+        
         /* Responsive progress bar */
-        #progressBarContainer {
-            width: 100%;
-            max-width: 480px;
-            height: 10px;
-            background: #333;
-            border-radius: 5px;
-            margin-top: 20px;
-            overflow: hidden;
+        #progressBarContainer { 
+            width: 100%; 
+            max-width: 480px; 
+            height: 10px; 
+            background: #333; 
+            border-radius: 5px; 
+            margin-top: 20px; 
+            overflow: hidden; 
         }
         #progressBar { width: 0%; height: 100%; background: #4CAF50; transition: width 0.1s linear; }
     </style>
@@ -73,9 +73,9 @@
         <video class="input_video" width="480" height="480" autoplay playsinline></video>
         <canvas class="output_canvas" width="480" height="480"></canvas>
     </div>
-
+    
     <div id="instructionText">Loading camera...</div>
-
+    
     <div id="progressBarContainer">
         <div id="progressBar"></div>
     </div>
@@ -87,67 +87,9 @@
         const instructionText = document.getElementById('instructionText');
         const progressBar = document.getElementById('progressBar');
 
-        const FRAMES_TO_CAPTURE = 45;
+        const FRAMES_TO_CAPTURE = 45; 
         let validFrameCount = 0;
         let isCaptured = false;
-
-        function getRegionContrast(landmarks, indices) {
-            let minX = Infinity, minY = Infinity, maxX = 0, maxY = 0;
-            indices.forEach(i => {
-                const x = landmarks[i].x * canvasElement.width;
-                const y = landmarks[i].y * canvasElement.height;
-                minX = Math.min(minX, x); minY = Math.min(minY, y);
-                maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
-            });
-
-            const width = Math.max(1, maxX - minX);
-            const height = Math.max(1, maxY - minY);
-
-            if (minX < 0 || minY < 0 || minX + width > canvasElement.width || minY + height > canvasElement.height) return 255;
-
-            const imageData = canvasCtx.getImageData(minX, minY, width, height);
-            const data = imageData.data;
-            let totalLuminance = 0;
-            const luminances = [];
-
-            for (let i = 0; i < data.length; i += 4) {
-                const lum = 0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2];
-                totalLuminance += lum;
-                luminances.push(lum);
-            }
-
-            const mean = totalLuminance / luminances.length;
-            let sumSquareDiff = 0;
-            luminances.forEach(lum => {
-                sumSquareDiff += Math.pow(lum - mean, 2);
-            });
-
-            return Math.sqrt(sumSquareDiff / luminances.length);
-        }
-
-        function getRegionLuminance(landmarks, indices) {
-            let minX = Infinity, minY = Infinity, maxX = 0, maxY = 0;
-            indices.forEach(i => {
-                const x = landmarks[i].x * canvasElement.width;
-                const y = landmarks[i].y * canvasElement.height;
-                minX = Math.min(minX, x); minY = Math.min(minY, y);
-                maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
-            });
-
-            const width = Math.max(1, maxX - minX);
-            const height = Math.max(1, maxY - minY);
-
-            if (minX < 0 || minY < 0 || minX + width > canvasElement.width || minY + height > canvasElement.height) return 255;
-
-            const imageData = canvasCtx.getImageData(minX, minY, width, height);
-            const data = imageData.data;
-            let totalLuminance = 0;
-
-            for (let i = 0; i < data.length; i += 4) {
-                totalLuminance += 0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2];
-            }
-            return totalLuminance / (data.length / 4);
-        }
 
         function onResults(results) {
             if (isCaptured) return;
@@ -158,7 +100,7 @@
 
             let allConditionsMet = false;
             let feedbackMsg = "Please look at the camera.";
-            let msgColor = "#F44336";
+            let msgColor = "#F44336"; 
 
             if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
                 feedbackMsg = "No face detected.";
@@ -199,41 +141,29 @@
                 // 3. Gaze Check (Iris Tracking)
                 const leftEyeOuter = landmarks[33];
                 const leftEyeInner = landmarks[133];
-                const leftIris = landmarks[468];
-
+                const leftIris = landmarks[468]; 
+                
                 const rightEyeInner = landmarks[362];
                 const rightEyeOuter = landmarks[263];
                 const rightIris = landmarks[473];
 
                 const leftEyeWidth = Math.abs(leftEyeInner.x - leftEyeOuter.x);
                 const leftIrisPos = Math.abs(leftIris.x - leftEyeOuter.x) / leftEyeWidth;
-
+                
                 const rightEyeWidth = Math.abs(rightEyeInner.x - rightEyeOuter.x);
                 const rightIrisPos = Math.abs(rightIris.x - rightEyeInner.x) / rightEyeWidth;
-
+                
                 const isLookingSideways = leftIrisPos < 0.35 || leftIrisPos > 0.65 || rightIrisPos < 0.35 || rightIrisPos > 0.65;
-
-                // 4. Sunglasses Check (Nose-Tip Reference)
-                const leftEyeIndices = [33, 133, 160, 158, 144, 153];
-                const noseTipIndices = [1, 4, 5, 195];
-
-                const eyeContrast = getRegionContrast(landmarks, leftEyeIndices);
-                const eyeLuminance = getRegionLuminance(landmarks, leftEyeIndices);
-                const noseLuminance = getRegionLuminance(landmarks, noseTipIndices);
-
-                const isWearingSunglasses = (eyeContrast < 12) || (eyeLuminance < (noseLuminance * 0.50));
 
                 // Evaluate Conditions (Priority order)
                 if (faceArea < 0.18) {
                     feedbackMsg = "Please move your face closer to the camera.";
                 } else if (isLookingAway || isLookingSideways) {
                     feedbackMsg = "Please look directly at the camera.";
-                } else if (isWearingSunglasses) {
-                    feedbackMsg = "Please remove your sunglasses.";
                 } else {
                     allConditionsMet = true;
                     feedbackMsg = "Perfect! Hold still...";
-                    msgColor = "#4CAF50";
+                    msgColor = "#4CAF50"; 
                 }
             }
 
@@ -261,15 +191,15 @@
         const faceMesh = new FaceMesh({locateFile: (file) => {
             return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
         }});
-
+        
         faceMesh.setOptions({
-            selfieMode: true,
-            maxNumFaces: 2,
+            selfieMode: true, 
+            maxNumFaces: 2, 
             refineLandmarks: true,
             minDetectionConfidence: 0.5,
             minTrackingConfidence: 0.5
         });
-
+        
         faceMesh.onResults(onResults);
 
         const camera = new Camera(videoElement, {
