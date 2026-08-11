@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Strict Selfie Verification</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            font-family: sans-serif;
+            background-color: #121212;
+            color: white;
+            margin: 0;
+            padding: 20px;
+        }
+        h2 { text-align: center; font-size: 1.5rem; }
+
+        /* Responsive container that shrinks to fit mobile screens but maxes out at 480px on desktop */
+        .container {
+            position: relative;
+            width: 100%;
+            max-width: 480px;
+            aspect-ratio: 1 / 1; /* Keeps it a perfect square */
+            margin-top: 10px;
+        }
+
+        video { display: none; }
+
+        /* Canvas scales fluidly with the container */
+        canvas {
+            width: 100%;
+            height: 100%;
+            border: 4px solid #333;
+            border-radius: 50%;
+            object-fit: cover;
+            position: absolute;
+            top: 0;
+            left: 0;
+            transition: border-color 0.3s;
+        }
+        .success-canvas { border-color: #4CAF50; }
+
+        #instructionText {
+            margin-top: 20px;
+            font-size: 1.1rem;
+            font-weight: bold;
+            text-align: center;
+            min-height: 30px;
+            padding: 0 10px;
+        }
+
+        /* Responsive progress bar */
+        #progressBarContainer {
+            width: 100%;
+            max-width: 480px;
+            height: 10px;
+            background: #333;
+            border-radius: 5px;
+            margin-top: 20px;
+            overflow: hidden;
+        }
+        #progressBar { width: 0%; height: 100%; background: #4CAF50; transition: width 0.1s linear; }
+    </style>
+</head>
+<body>
+    <h2>Strict Selfie Verification</h2>
+    <div class="container">
+        <video class="input_video" width="480" height="480" autoplay playsinline></video>
+        <canvas class="output_canvas" width="480" height="480"></canvas>
+    </div>
+
+    <div id="instructionText">Loading camera...</div>
+
+    <div id="progressBarContainer">
+        <div id="progressBar"></div>
+    </div>
+
+    <script>
+        const videoElement = document.querySelector('.input_video');
+        const canvasElement = document.querySelector('.output_canvas');
+        const canvasCtx = canvasElement.getContext('2d', { willReadFrequently: true });
+        const instructionText = document.getElementById('instructionText');
+        const progressBar = document.getElementById('progressBar');
+
+        const FRAMES_TO_CAPTURE = 45;
+        let validFrameCount = 0;
+        let isCaptured = false;
+
+        function getRegionContrast(landmarks, indices) {
+            let minX = Infinity, minY = Infinity, maxX = 0, maxY = 0;
+            indices.forEach(i => {
+                const x = landmarks[i].x * canvasElement.width;
+                const y = landmarks[i].y * canvasElement.height;
+                minX = Math.min(minX, x); minY = Math.min(minY, y);
+                maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
+            });
+
+            const width = Math.max(1, maxX - minX);
+            const height = Math.max(1, maxY - minY);
+
+            if (minX < 0 || minY < 0 || minX + width > canvasElement.width || minY + height > canvasElement.height) return 255;
+
+            const imageData = canvasCtx.getImageData(minX, minY, width, height);
+            const data = imageData.data;
+            let totalLuminance = 0;
+            const luminances = [];
+
+            for (let i = 0; i < data.length; i += 4) {
+                const lum = 0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2];
+                totalLuminance += lum;
+                luminances.push(lum);
+            }
+
+            const mean = totalLuminance / luminances.length;
+            let sumSquareDiff = 0;
+            luminances.forEach(lum => {
+                sumSquareDiff += Math.pow(lum - mean, 2);
+            });
+
+            return Math.sqrt(sumSquareDiff / luminances.length);
+        }
+
+        function getRegionLuminance(landmarks, indices) {
+            let minX = Infinity, minY = Infinity, maxX = 0, maxY = 0;
+            indices.forEach(i => {
+                const x = landmarks[i].x * canvasElement.width;
+                const y = landmarks[i].y * canvasElement.height;
+                minX = Math.min(minX, x); minY = Math.min(minY, y);
+                maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
+            });
+
+            const width = Math.max(1, maxX - minX);
+            const height = Math.max(1, maxY - minY);
+
+            if (minX < 0 || minY < 0 || minX + width > canvasElement.width || minY + height > canvasElement.height) return 255;
+
+            const imageData = canvasCtx.getImageData(minX, minY, width, height);
+            const data = imageData.data;
+            let totalLuminance = 0;
+
+            for (let i = 0; i < data.length; i += 4) {
+                totalLuminance += 0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2];
+            }
+            return totalLuminance / (data.length / 4);
+        }
+
+        function onResults(results) {
+            if (isCaptured) return;
+
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+            let allConditionsMet = false;
+            let feedbackMsg = "Please look at the camera.";
+            let msgColor = "#F44336";
+
+            if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
+                feedbackMsg = "No face detected.";
+            } else if (results.multiFaceLandmarks.length > 1) {
+                feedbackMsg = "Ensure exactly ONE person is in the frame.";
+            } else {
+                const landmarks = results.multiFaceLandmarks[0];
+
+                // 1. Distance / Close Enough Check
+                let minX = 1, minY = 1, maxX = 0, maxY = 0;
+                landmarks.forEach(lm => {
+                    minX = Math.min(minX, lm.x); minY = Math.min(minY, lm.y);
+                    maxX = Math.max(maxX, lm.x); maxY = Math.max(maxY, lm.y);
+                });
+                const faceArea = (maxX - minX) * (maxY - minY);
+
+                // 2. Pose Check (Skull Orientation: Yaw and Pitch)
+                const nose = landmarks[1];
+                const leftCheek = landmarks[234];
+                const rightCheek = landmarks[454];
+                const bottomEdge = landmarks[152];
+                const leftEye = landmarks[145];
+                const rightEye = landmarks[374];
+
+                const leftDist = Math.abs(nose.x - leftCheek.x);
+                const rightDist = Math.abs(rightCheek.x - nose.x);
+                const yawRatio = leftDist / rightDist;
+                const isLookingAwayYaw = yawRatio < 0.65 || yawRatio > 1.5;
+
+                const avgEyeY = (leftEye.y + rightEye.y) / 2;
+                const upperFaceDist = nose.y - avgEyeY;
+                const lowerFaceDist = bottomEdge.y - nose.y;
+                const pitchRatio = upperFaceDist / lowerFaceDist;
+                const isLookingAwayPitch = pitchRatio < 0.55 || pitchRatio > 1.25;
+
+                const isLookingAway = isLookingAwayYaw || isLookingAwayPitch;
+
+                // 3. Gaze Check (Iris Tracking)
+                const leftEyeOuter = landmarks[33];
+                const leftEyeInner = landmarks[133];
+                const leftIris = landmarks[468];
+
+                const rightEyeInner = landmarks[362];
+                const rightEyeOuter = landmarks[263];
+                const rightIris = landmarks[473];
+
+                const leftEyeWidth = Math.abs(leftEyeInner.x - leftEyeOuter.x);
+                const leftIrisPos = Math.abs(leftIris.x - leftEyeOuter.x) / leftEyeWidth;
+
+                const rightEyeWidth = Math.abs(rightEyeInner.x - rightEyeOuter.x);
+                const rightIrisPos = Math.abs(rightIris.x - rightEyeInner.x) / rightEyeWidth;
+
+                const isLookingSideways = leftIrisPos < 0.35 || leftIrisPos > 0.65 || rightIrisPos < 0.35 || rightIrisPos > 0.65;
+
+                // 4. Sunglasses Check (Nose-Tip Reference)
+                const leftEyeIndices = [33, 133, 160, 158, 144, 153];
+                const noseTipIndices = [1, 4, 5, 195];
+
+                const eyeContrast = getRegionContrast(landmarks, leftEyeIndices);
+                const eyeLuminance = getRegionLuminance(landmarks, leftEyeIndices);
+                const noseLuminance = getRegionLuminance(landmarks, noseTipIndices);
+
+                const isWearingSunglasses = (eyeContrast < 12) || (eyeLuminance < (noseLuminance * 0.50));
+
+                // Evaluate Conditions (Priority order)
+                if (faceArea < 0.18) {
+                    feedbackMsg = "Please move your face closer to the camera.";
+                } else if (isLookingAway || isLookingSideways) {
+                    feedbackMsg = "Please look directly at the camera.";
+                } else if (isWearingSunglasses) {
+                    feedbackMsg = "Please remove your sunglasses.";
+                } else {
+                    allConditionsMet = true;
+                    feedbackMsg = "Perfect! Hold still...";
+                    msgColor = "#4CAF50";
+                }
+            }
+
+            canvasCtx.restore();
+            instructionText.innerText = feedbackMsg;
+            instructionText.style.color = msgColor;
+
+            // Auto-Capture Logic
+            if (allConditionsMet) {
+                validFrameCount++;
+                canvasElement.classList.add('success-canvas');
+            } else {
+                validFrameCount = 0;
+                canvasElement.classList.remove('success-canvas');
+            }
+
+            progressBar.style.width = `${Math.min((validFrameCount / FRAMES_TO_CAPTURE) * 100, 100)}%`;
+
+            if (validFrameCount >= FRAMES_TO_CAPTURE) {
+                isCaptured = true;
+                instructionText.innerText = "Selfie Captured Successfully!";
+            }
+        }
+
+        const faceMesh = new FaceMesh({locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
+        }});
+
+        faceMesh.setOptions({
+            selfieMode: true,
+            maxNumFaces: 2,
+            refineLandmarks: true,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        faceMesh.onResults(onResults);
+
+        const camera = new Camera(videoElement, {
+            onFrame: async () => { await faceMesh.send({image: videoElement}); },
+            width: 480, height: 480
+        });
+        camera.start();
+    </script>
+</body>
+</html>
