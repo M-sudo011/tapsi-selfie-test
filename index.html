@@ -371,7 +371,7 @@
           <div class="check" id="distanceCheck">Distance</div>
           <div class="check" id="angleCheck">Face angle</div>
           <div class="check" id="qualityCheck">Quality</div>
-          <div class="check advisory" id="eyesCheck">Eye visibility</div>
+          <div class="check advisory" id="eyesCheck">Eye-area detail</div>
         </div>
 
         <p class="eye-advice" id="eyeAdvice" hidden>Tip: face the light and make both eyes clearly visible.</p>
@@ -409,6 +409,7 @@
       maxYawRatio: 0.22,
       minPitchRatio: 0.32,
       maxPitchRatio: 0.74,
+      maxRollDegrees: 12,
       minEyeContrast: 11,
       minEyeEdgeStrength: 5,
       simulatedBlurRadius: 5,
@@ -458,7 +459,7 @@
       tooFar: { message: "Move closer to the camera.", detail: "Your face is currently too small in the image.", icon: "↑", color: "warning" },
       tooClose: { message: "Move slightly away.", detail: "Leave a little space around your face.", icon: "↓", color: "warning" },
       clipped: { message: "Center your face in the frame.", detail: "Make sure your entire face is visible.", icon: "↔", color: "warning" },
-      angle: { message: "Look straight at the camera.", detail: "Keep your face front-on, not turned sideways or looking up or down.", icon: "◎", color: "warning" },
+      angle: { message: "Look straight at the camera.", detail: "Keep your head upright and your face front-on, not turned sideways or looking up or down.", icon: "◎", color: "warning" },
       dark: { message: "Find a brighter place.", detail: "Light your face evenly from the front.", icon: "☀", color: "warning" },
       bright: { message: "Move away from the strong light.", detail: "Your face is overexposed.", icon: "☀", color: "warning" },
       blurry: { message: "Hold the phone steady.", detail: "The image is blurry. Clean the lens if needed.", icon: "~", color: "warning" },
@@ -496,20 +497,20 @@
       eyeCheck.classList.remove("pass", "fail", "warn");
 
       if (isProminent === true) {
-        eyeCheck.textContent = "Eyes clear";
+        eyeCheck.textContent = "Eye-area detail";
         eyeCheck.classList.add("pass");
         eyeAdvice.hidden = true;
         return;
       }
 
       if (isProminent === false) {
-        eyeCheck.textContent = "Improve eye visibility";
+        eyeCheck.textContent = "Improve eye-area detail";
         eyeCheck.classList.add("warn");
         eyeAdvice.hidden = false;
         return;
       }
 
-      eyeCheck.textContent = "Eye visibility";
+      eyeCheck.textContent = "Eye-area detail";
       eyeAdvice.hidden = true;
     }
 
@@ -538,22 +539,38 @@
       if (!Array.isArray(landmarks) || landmarks.length < 4) return null;
 
       // MediaPipe order: right eye, left eye, nose tip, mouth center.
-      const rightEye = landmarks[0];
-      const leftEye = landmarks[1];
+      // Sort by image position so the eye axis always points left-to-right.
+      const imageLeftEye = landmarks[0].x <= landmarks[1].x ? landmarks[0] : landmarks[1];
+      const imageRightEye = imageLeftEye === landmarks[0] ? landmarks[1] : landmarks[0];
       const nose = landmarks[2];
       const mouth = landmarks[3];
       const eyeMidpoint = {
-        x: (rightEye.x + leftEye.x) / 2,
-        y: (rightEye.y + leftEye.y) / 2
+        x: (imageLeftEye.x + imageRightEye.x) / 2,
+        y: (imageLeftEye.y + imageRightEye.y) / 2
       };
-      const eyeSpan = Math.hypot(leftEye.x - rightEye.x, leftEye.y - rightEye.y);
-      const eyeToMouth = mouth.y - eyeMidpoint.y;
+      const eyeDeltaX = imageRightEye.x - imageLeftEye.x;
+      const eyeDeltaY = imageRightEye.y - imageLeftEye.y;
+      const eyeSpan = Math.hypot(eyeDeltaX, eyeDeltaY);
+      const rollRadians = Math.atan2(eyeDeltaY, eyeDeltaX);
+      const cosine = Math.cos(rollRadians);
+      const sine = Math.sin(rollRadians);
+      const alignToEyeLine = (point) => {
+        const x = point.x - eyeMidpoint.x;
+        const y = point.y - eyeMidpoint.y;
+        return {
+          x: x * cosine + y * sine,
+          y: -x * sine + y * cosine
+        };
+      };
+      const alignedNose = alignToEyeLine(nose);
+      const alignedMouth = alignToEyeLine(mouth);
 
-      if (eyeSpan < 0.001 || eyeToMouth < 0.001) return null;
+      if (eyeSpan < 0.001 || alignedMouth.y < 0.001) return null;
 
       return {
-        yawRatio: (nose.x - eyeMidpoint.x) / eyeSpan,
-        pitchRatio: (nose.y - eyeMidpoint.y) / eyeToMouth
+        yawRatio: alignedNose.x / eyeSpan,
+        pitchRatio: alignedNose.y / alignedMouth.y,
+        rollDegrees: rollRadians * 180 / Math.PI
       };
     }
 
@@ -726,6 +743,7 @@
       if (pose) {
         parts.push(`yaw ${pose.yawRatio.toFixed(2)}`);
         parts.push(`pitch ${pose.pitchRatio.toFixed(2)}`);
+        parts.push(`roll ${pose.rollDegrees.toFixed(0)}°`);
       }
       debugReadout.textContent = parts.length ? parts.join(" · ") : "Waiting for a face…";
     }
@@ -787,7 +805,8 @@
       const anglePass = pose &&
         Math.abs(pose.yawRatio) <= CONFIG.maxYawRatio &&
         pose.pitchRatio >= CONFIG.minPitchRatio &&
-        pose.pitchRatio <= CONFIG.maxPitchRatio;
+        pose.pitchRatio <= CONFIG.maxPitchRatio &&
+        Math.abs(pose.rollDegrees) <= CONFIG.maxRollDegrees;
       if (!anglePass) {
         invalidate();
         setEyeProminence(null);
