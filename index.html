@@ -246,6 +246,27 @@
       color: #ff9499;
     }
 
+    .check.warn {
+      border-color: rgba(255,181,71,0.38);
+      background: rgba(255,181,71,0.09);
+      color: #ffd18a;
+    }
+
+    .check.advisory { grid-column: 1 / -1; }
+
+    .eye-advice {
+      margin: 10px 2px 0;
+      padding: 9px 11px;
+      border-radius: 11px;
+      background: rgba(255,181,71,0.09);
+      color: #ffd18a;
+      font-size: 0.76rem;
+      line-height: 1.4;
+      text-align: center;
+    }
+
+    .eye-advice[hidden] { display: none; }
+
     button {
       width: 100%;
       margin-top: 16px;
@@ -350,7 +371,10 @@
           <div class="check" id="distanceCheck">Distance</div>
           <div class="check" id="angleCheck">Face angle</div>
           <div class="check" id="qualityCheck">Quality</div>
+          <div class="check advisory" id="eyesCheck">Eye visibility</div>
         </div>
+
+        <p class="eye-advice" id="eyeAdvice" hidden>Tip: face the light and make both eyes clearly visible.</p>
 
         <button type="button" id="retryButton" hidden>Retake selfie</button>
 
@@ -385,6 +409,8 @@
       maxYawRatio: 0.22,
       minPitchRatio: 0.32,
       maxPitchRatio: 0.74,
+      minEyeContrast: 11,
+      minEyeEdgeStrength: 5,
       simulatedBlurRadius: 5,
       historySize: 6,
       requiredValidSamples: 5
@@ -401,6 +427,7 @@
     const statusIcon = document.getElementById("statusIcon");
     const progress = document.getElementById("progress");
     const retryButton = document.getElementById("retryButton");
+    const eyeAdvice = document.getElementById("eyeAdvice");
     const debugControls = document.getElementById("debugControls");
     const debugReadout = document.getElementById("debugReadout");
     const blurTestButton = document.getElementById("blurTestButton");
@@ -408,7 +435,8 @@
       face: document.getElementById("faceCheck"),
       distance: document.getElementById("distanceCheck"),
       angle: document.getElementById("angleCheck"),
-      quality: document.getElementById("qualityCheck")
+      quality: document.getElementById("qualityCheck"),
+      eyes: document.getElementById("eyesCheck")
     };
 
     const debugParameter = new URLSearchParams(window.location.search).get("debug");
@@ -435,7 +463,7 @@
       bright: { message: "Move away from the strong light.", detail: "Your face is overexposed.", icon: "☀", color: "warning" },
       blurry: { message: "Hold the phone steady.", detail: "The image is blurry. Clean the lens if needed.", icon: "~", color: "warning" },
       ready: { message: "Great — hold still.", detail: "Checking a few stable frames before capture.", icon: "✓", color: "success" },
-      captured: { message: "Selfie captured successfully.", detail: "All local quality checks passed.", icon: "✓", color: "success" },
+      captured: { message: "Selfie captured successfully.", detail: "All required local quality checks passed.", icon: "✓", color: "success" },
       unsupported: { message: "Camera access is not supported.", detail: "Try an updated version of Chrome or another browser.", icon: "!", color: "danger" },
       denied: { message: "Camera access was blocked.", detail: "Enable camera permission in the browser and try again.", icon: "!", color: "danger" },
       error: { message: "The selfie checker could not start.", detail: "Reload the page and try again.", icon: "!", color: "danger" }
@@ -456,10 +484,33 @@
       document.documentElement.style.setProperty("--ring-soft", colors[state.color].soft);
 
       for (const [key, element] of Object.entries(checks)) {
-        element.classList.remove("pass", "fail");
+        if (key === "eyes") continue;
+        element.classList.remove("pass", "fail", "warn");
         if (checkState[key] === true) element.classList.add("pass");
         if (checkState[key] === false) element.classList.add("fail");
       }
+    }
+
+    function setEyeProminence(isProminent) {
+      const eyeCheck = checks.eyes;
+      eyeCheck.classList.remove("pass", "fail", "warn");
+
+      if (isProminent === true) {
+        eyeCheck.textContent = "Eyes clear";
+        eyeCheck.classList.add("pass");
+        eyeAdvice.hidden = true;
+        return;
+      }
+
+      if (isProminent === false) {
+        eyeCheck.textContent = "Improve eye visibility";
+        eyeCheck.classList.add("warn");
+        eyeAdvice.hidden = false;
+        return;
+      }
+
+      eyeCheck.textContent = "Eye visibility";
+      eyeAdvice.hidden = true;
     }
 
     function normalizeBox(detection) {
@@ -539,7 +590,62 @@
       return output;
     }
 
-    function faceMetrics(box) {
+    function regionMetrics(gray, size, centerX, centerY, halfWidth, halfHeight) {
+      const startX = Math.max(1, Math.floor(centerX - halfWidth));
+      const endX = Math.min(size - 2, Math.ceil(centerX + halfWidth));
+      const startY = Math.max(1, Math.floor(centerY - halfHeight));
+      const endY = Math.min(size - 2, Math.ceil(centerY + halfHeight));
+      if (endX <= startX || endY <= startY) return null;
+
+      let total = 0;
+      let squaredTotal = 0;
+      let edgeTotal = 0;
+      let count = 0;
+
+      for (let y = startY; y <= endY; y += 1) {
+        for (let x = startX; x <= endX; x += 1) {
+          const index = y * size + x;
+          const value = gray[index];
+          total += value;
+          squaredTotal += value * value;
+          edgeTotal += (Math.abs(value - gray[index - 1]) + Math.abs(value - gray[index - size])) / 2;
+          count += 1;
+        }
+      }
+
+      const mean = total / count;
+      return {
+        contrast: Math.sqrt(Math.max(0, squaredTotal / count - mean * mean)),
+        edgeStrength: edgeTotal / count
+      };
+    }
+
+    function eyeProminenceMetrics(gray, landmarks, crop) {
+      if (!Array.isArray(landmarks) || landmarks.length < 2) return null;
+
+      const toCropPoint = (point) => ({
+        x: ((point.x * crop.sourceWidth - crop.sx) / crop.sw) * CONFIG.analysisSize,
+        y: ((point.y * crop.sourceHeight - crop.sy) / crop.sh) * CONFIG.analysisSize
+      });
+      const rightEye = toCropPoint(landmarks[0]);
+      const leftEye = toCropPoint(landmarks[1]);
+      const eyeSpan = Math.hypot(leftEye.x - rightEye.x, leftEye.y - rightEye.y);
+      const halfWidth = Math.max(5, Math.min(17, eyeSpan * 0.27));
+      const halfHeight = Math.max(3, Math.min(11, eyeSpan * 0.17));
+      const rightMetrics = regionMetrics(gray, CONFIG.analysisSize, rightEye.x, rightEye.y, halfWidth, halfHeight);
+      const leftMetrics = regionMetrics(gray, CONFIG.analysisSize, leftEye.x, leftEye.y, halfWidth, halfHeight);
+      if (!rightMetrics || !leftMetrics) return null;
+
+      const contrast = Math.min(rightMetrics.contrast, leftMetrics.contrast);
+      const edgeStrength = Math.min(rightMetrics.edgeStrength, leftMetrics.edgeStrength);
+      return {
+        contrast,
+        edgeStrength,
+        prominent: contrast >= CONFIG.minEyeContrast && edgeStrength >= CONFIG.minEyeEdgeStrength
+      };
+    }
+
+    function faceMetrics(box, landmarks) {
       const sourceWidth = video.videoWidth;
       const sourceHeight = video.videoHeight;
       const paddingX = box.width * 0.08;
@@ -560,6 +666,8 @@
         gray[index] = value;
         brightnessTotal += value;
       }
+
+      const eyes = eyeProminenceMetrics(gray, landmarks, { sourceWidth, sourceHeight, sx, sy, sw, sh });
 
       let sharpnessPixels = gray;
       if (simulateBlur) {
@@ -585,7 +693,8 @@
       const laplacianMean = laplacianTotal / laplacianCount;
       return {
         brightness: brightnessTotal / count,
-        sharpness: laplacianSquaredTotal / laplacianCount - laplacianMean * laplacianMean
+        sharpness: laplacianSquaredTotal / laplacianCount - laplacianMean * laplacianMean,
+        eyes
       };
     }
 
@@ -610,6 +719,9 @@
       if (metrics) {
         parts.push(`sharpness ${metrics.sharpness.toFixed(0)}`);
         parts.push(`light ${metrics.brightness.toFixed(0)}`);
+        if (metrics.eyes) {
+          parts.push(`eyes ${metrics.eyes.contrast.toFixed(0)}/${metrics.eyes.edgeStrength.toFixed(0)}`);
+        }
       }
       if (pose) {
         parts.push(`yaw ${pose.yawRatio.toFixed(2)}`);
@@ -625,6 +737,7 @@
 
       if (detections.length === 0) {
         invalidate();
+        setEyeProminence(null);
         updateDebugReadout(null, null);
         applyState("noFace", { face: false });
         return;
@@ -632,6 +745,7 @@
 
       if (detections.length > 1) {
         invalidate();
+        setEyeProminence(null);
         updateDebugReadout(null, null);
         applyState("multipleFaces", { face: false });
         return;
@@ -640,6 +754,7 @@
       const box = normalizeBox(detections[0]);
       if (!box) {
         invalidate();
+        setEyeProminence(null);
         applyState("error", { face: false });
         return;
       }
@@ -647,12 +762,14 @@
       const facePass = true;
       if (box.height < CONFIG.minFaceHeightRatio) {
         invalidate();
+        setEyeProminence(null);
         applyState("tooFar", { face: facePass, distance: false });
         return;
       }
 
       if (box.height > CONFIG.maxFaceHeightRatio) {
         invalidate();
+        setEyeProminence(null);
         applyState("tooClose", { face: facePass, distance: false });
         return;
       }
@@ -661,6 +778,7 @@
       const isClipped = box.x < margin || box.y < margin || box.x + box.width > 1 - margin || box.y + box.height > 1 - margin;
       if (isClipped) {
         invalidate();
+        setEyeProminence(null);
         applyState("clipped", { face: facePass, distance: false });
         return;
       }
@@ -672,12 +790,14 @@
         pose.pitchRatio <= CONFIG.maxPitchRatio;
       if (!anglePass) {
         invalidate();
+        setEyeProminence(null);
         updateDebugReadout(null, pose);
         applyState("angle", { face: facePass, distance: true, angle: false });
         return;
       }
 
-      const metrics = faceMetrics(box);
+      const metrics = faceMetrics(box, detections[0].landmarks);
+      setEyeProminence(metrics.eyes ? metrics.eyes.prominent : null);
       updateDebugReadout(metrics, pose);
       if (metrics.brightness < CONFIG.minBrightness) {
         invalidate();
@@ -810,6 +930,7 @@
       progress.style.width = "0";
       capturedImage.removeAttribute("src");
       viewfinder.classList.remove("captured");
+      setEyeProminence(null);
       retryButton.hidden = true;
       await startCamera();
     });
