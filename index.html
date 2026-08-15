@@ -1,212 +1,673 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Strict Selfie Verification</title>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
-    <style>
-        * { box-sizing: border-box; }
-        body { 
-            display: flex; 
-            flex-direction: column; 
-            align-items: center; 
-            font-family: sans-serif; 
-            background-color: #121212; 
-            color: white; 
-            margin: 0;
-            padding: 20px;
-        }
-        h2 { text-align: center; font-size: 1.5rem; }
-        
-        /* Responsive container that shrinks to fit mobile screens but maxes out at 480px on desktop */
-        .container { 
-            position: relative; 
-            width: 100%; 
-            max-width: 480px; 
-            aspect-ratio: 1 / 1; /* Keeps it a perfect square */
-            margin-top: 10px;
-        }
-        
-        video { display: none; } 
-        
-        /* Canvas scales fluidly with the container */
-        canvas { 
-            width: 100%;
-            height: 100%;
-            border: 4px solid #333; 
-            border-radius: 50%; 
-            object-fit: cover; 
-            position: absolute; 
-            top: 0; 
-            left: 0; 
-            transition: border-color 0.3s; 
-        }
-        .success-canvas { border-color: #4CAF50; }
-        
-        #instructionText { 
-            margin-top: 20px; 
-            font-size: 1.1rem; 
-            font-weight: bold; 
-            text-align: center; 
-            min-height: 30px;
-            padding: 0 10px;
-        }
-        
-        /* Responsive progress bar */
-        #progressBarContainer { 
-            width: 100%; 
-            max-width: 480px; 
-            height: 10px; 
-            background: #333; 
-            border-radius: 5px; 
-            margin-top: 20px; 
-            overflow: hidden; 
-        }
-        #progressBar { width: 0%; height: 100%; background: #4CAF50; transition: width 0.1s linear; }
-    </style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+  <meta name="theme-color" content="#0f1115">
+  <title>Selfie Quality Check</title>
+  <script defer src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection@0.4/face_detection.js" crossorigin="anonymous"></script>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0f1115;
+      --surface: #181b21;
+      --surface-2: #22262e;
+      --text: #f7f8fa;
+      --muted: #a8afb9;
+      --accent: #ff5a3c;
+      --warning: #ffb547;
+      --success: #35c77a;
+      --danger: #ff5f66;
+      --ring: var(--warning);
+      --ring-soft: rgba(255,181,71,0.18);
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body { min-height: 100%; }
+
+    body {
+      margin: 0;
+      padding: 20px 18px 24px;
+      padding: max(20px, env(safe-area-inset-top)) 18px max(24px, env(safe-area-inset-bottom));
+      background:
+        radial-gradient(circle at 50% -20%, rgba(255, 90, 60, 0.16), transparent 40%),
+        var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    main {
+      width: 100%;
+      max-width: 440px;
+      margin: 0 auto;
+    }
+
+    header {
+      margin-bottom: 18px;
+      text-align: center;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 1.45rem;
+      font-size: clamp(1.45rem, 5vw, 1.8rem);
+      letter-spacing: -0.03em;
+    }
+
+    .subtitle {
+      margin: 8px auto 0;
+      max-width: 34ch;
+      color: var(--muted);
+      font-size: 0.94rem;
+      line-height: 1.45;
+    }
+
+    .camera-card {
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 28px;
+      background: var(--surface);
+      box-shadow: 0 24px 70px rgba(0,0,0,0.32);
+    }
+
+    .viewfinder {
+      position: relative;
+      width: 100%;
+      height: calc((100vw - 36px) * 1.3333);
+      max-height: 586px;
+      aspect-ratio: 3 / 4;
+      overflow: hidden;
+      background: #07080a;
+      isolation: isolate;
+    }
+
+    video,
+    #capturedImage {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    video {
+      display: block;
+      transform: scaleX(-1);
+    }
+
+    #capturedImage {
+      display: none;
+    }
+
+    .viewfinder.captured video,
+    .viewfinder.captured .guide,
+    .viewfinder.captured .shade {
+      display: none;
+    }
+
+    .viewfinder.captured #capturedImage { display: block; }
+
+    .shade {
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      background: radial-gradient(ellipse 38% 39% at 50% 44%, transparent 97%, rgba(4,5,7,0.58) 100%);
+      pointer-events: none;
+    }
+
+    .guide {
+      position: absolute;
+      z-index: 2;
+      top: 11%;
+      left: 15%;
+      width: 70%;
+      height: 66%;
+      border: 3px solid var(--ring);
+      border-radius: 48% 48% 46% 46% / 42% 42% 55% 55%;
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.24), 0 0 28px var(--ring-soft);
+      transition: border-color 180ms ease, box-shadow 180ms ease;
+      pointer-events: none;
+    }
+
+    .privacy-badge {
+      position: absolute;
+      z-index: 3;
+      top: 14px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 7px 11px;
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 999px;
+      background: rgba(10,12,15,0.68);
+      color: #e7eaf0;
+      font-size: 0.76rem;
+      font-weight: 650;
+      white-space: nowrap;
+      backdrop-filter: blur(8px);
+    }
+
+    .privacy-badge::before {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--success);
+      content: "";
+      box-shadow: 0 0 0 3px rgba(53,199,122,0.17);
+    }
+
+    .panel {
+      padding: 20px;
+    }
+
+    .message-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      min-height: 56px;
+    }
+
+    .status-icon {
+      display: grid;
+      flex: 0 0 auto;
+      width: 34px;
+      height: 34px;
+      place-items: center;
+      border-radius: 50%;
+      background: var(--ring-soft);
+      color: var(--ring);
+      font-size: 1rem;
+      font-weight: 800;
+      transition: color 180ms ease, background-color 180ms ease;
+    }
+
+    #instruction {
+      margin: 0;
+      font-size: 1rem;
+      font-weight: 700;
+      line-height: 1.35;
+    }
+
+    #detail {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 0.82rem;
+      line-height: 1.4;
+    }
+
+    .progress-track {
+      height: 7px;
+      margin-top: 16px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: var(--surface-2);
+    }
+
+    #progress {
+      width: 0;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--success);
+      transition: width 180ms ease;
+    }
+
+    .checks {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-top: 16px;
+    }
+
+    .check {
+      padding: 9px 6px;
+      border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 12px;
+      background: rgba(255,255,255,0.025);
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-weight: 700;
+      text-align: center;
+      transition: color 160ms ease, border-color 160ms ease, background-color 160ms ease;
+    }
+
+    .check.pass {
+      border-color: rgba(53,199,122,0.34);
+      background: rgba(53,199,122,0.08);
+      color: #73e7a7;
+    }
+
+    .check.fail {
+      border-color: rgba(255,95,102,0.34);
+      background: rgba(255,95,102,0.08);
+      color: #ff9499;
+    }
+
+    button {
+      width: 100%;
+      margin-top: 16px;
+      padding: 13px 16px;
+      border: 0;
+      border-radius: 14px;
+      background: var(--accent);
+      color: white;
+      font: inherit;
+      font-weight: 750;
+      cursor: pointer;
+    }
+
+    button[hidden] { display: none; }
+    button:disabled { cursor: wait; opacity: 0.62; }
+
+    .technical-note {
+      margin: 14px 6px 0;
+      color: #747c87;
+      font-size: 0.72rem;
+      line-height: 1.45;
+      text-align: center;
+    }
+
+    #analysisCanvas,
+    #captureCanvas { display: none; }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        scroll-behavior: auto !important;
+        transition: none !important;
+      }
+    }
+  </style>
 </head>
 <body>
-    <h2>Strict Selfie Verification</h2>
-    <div class="container">
-        <video class="input_video" width="480" height="480" autoplay playsinline></video>
-        <canvas class="output_canvas" width="480" height="480"></canvas>
-    </div>
-    
-    <div id="instructionText">Loading camera...</div>
-    
-    <div id="progressBarContainer">
-        <div id="progressBar"></div>
-    </div>
+  <main>
+    <header>
+      <h1>Selfie quality check</h1>
+      <p class="subtitle">Center your face, move close enough, and hold the phone steady.</p>
+    </header>
 
-    <script>
-        const videoElement = document.querySelector('.input_video');
-        const canvasElement = document.querySelector('.output_canvas');
-        const canvasCtx = canvasElement.getContext('2d', { willReadFrequently: true });
-        const instructionText = document.getElementById('instructionText');
-        const progressBar = document.getElementById('progressBar');
+    <section class="camera-card" aria-label="Selfie camera">
+      <div class="viewfinder" id="viewfinder">
+        <video id="video" autoplay muted playsinline aria-label="Front camera preview"></video>
+        <img id="capturedImage" alt="Captured selfie preview">
+        <div class="shade"></div>
+        <div class="guide" aria-hidden="true"></div>
+        <div class="privacy-badge">Processed on this device</div>
+      </div>
 
-        const FRAMES_TO_CAPTURE = 45; 
-        let validFrameCount = 0;
-        let isCaptured = false;
+      <div class="panel" aria-live="polite">
+        <div class="message-row">
+          <div class="status-icon" id="statusIcon" aria-hidden="true">…</div>
+          <div>
+            <p id="instruction">Loading face detector…</p>
+            <p id="detail">Your camera image is never uploaded.</p>
+          </div>
+        </div>
 
-        function onResults(results) {
-            if (isCaptured) return;
+        <div class="progress-track" aria-hidden="true">
+          <div id="progress"></div>
+        </div>
 
-            canvasCtx.save();
-            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+        <div class="checks" aria-label="Selfie quality checks">
+          <div class="check" id="faceCheck">One face</div>
+          <div class="check" id="distanceCheck">Distance</div>
+          <div class="check" id="qualityCheck">Quality</div>
+        </div>
 
-            let allConditionsMet = false;
-            let feedbackMsg = "Please look at the camera.";
-            let msgColor = "#F44336"; 
+        <button type="button" id="retryButton" hidden>Retake selfie</button>
+      </div>
+    </section>
 
-            if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
-                feedbackMsg = "No face detected.";
-            } else if (results.multiFaceLandmarks.length > 1) {
-                feedbackMsg = "Ensure exactly ONE person is in the frame.";
-            } else {
-                const landmarks = results.multiFaceLandmarks[0];
+    <p class="technical-note">Detection runs locally in your browser. For best results, use even light and clean the camera lens.</p>
+  </main>
 
-                // 1. Distance / Close Enough Check
-                let minX = 1, minY = 1, maxX = 0, maxY = 0;
-                landmarks.forEach(lm => {
-                    minX = Math.min(minX, lm.x); minY = Math.min(minY, lm.y);
-                    maxX = Math.max(maxX, lm.x); maxY = Math.max(maxY, lm.y);
-                });
-                const faceArea = (maxX - minX) * (maxY - minY);
+  <canvas id="analysisCanvas" width="128" height="128"></canvas>
+  <canvas id="captureCanvas"></canvas>
 
-                // 2. Pose Check (Skull Orientation: Yaw and Pitch)
-                const nose = landmarks[1];
-                const leftCheek = landmarks[234];
-                const rightCheek = landmarks[454];
-                const bottomEdge = landmarks[152];
-                const leftEye = landmarks[145];
-                const rightEye = landmarks[374];
+  <script>
+    "use strict";
 
-                const leftDist = Math.abs(nose.x - leftCheek.x);
-                const rightDist = Math.abs(rightCheek.x - nose.x);
-                const yawRatio = leftDist / rightDist;
-                const isLookingAwayYaw = yawRatio < 0.65 || yawRatio > 1.5;
+    // Centralized tuning values. Validate these against representative target phones.
+    const CONFIG = Object.freeze({
+      detectionIntervalMs: 200,
+      minDetectionConfidence: 0.60,
+      minFaceHeightRatio: 0.30,
+      maxFaceHeightRatio: 0.82,
+      minEdgeMarginRatio: 0.025,
+      analysisSize: 128,
+      minSharpness: 80,
+      minBrightness: 42,
+      maxBrightness: 218,
+      historySize: 6,
+      requiredValidSamples: 5
+    });
 
-                const avgEyeY = (leftEye.y + rightEye.y) / 2;
-                const upperFaceDist = nose.y - avgEyeY;
-                const lowerFaceDist = bottomEdge.y - nose.y;
-                const pitchRatio = upperFaceDist / lowerFaceDist;
-                const isLookingAwayPitch = pitchRatio < 0.55 || pitchRatio > 1.25;
+    const video = document.getElementById("video");
+    const viewfinder = document.getElementById("viewfinder");
+    const capturedImage = document.getElementById("capturedImage");
+    const analysisCanvas = document.getElementById("analysisCanvas");
+    const analysisContext = analysisCanvas.getContext("2d", { willReadFrequently: true });
+    const captureCanvas = document.getElementById("captureCanvas");
+    const instruction = document.getElementById("instruction");
+    const detail = document.getElementById("detail");
+    const statusIcon = document.getElementById("statusIcon");
+    const progress = document.getElementById("progress");
+    const retryButton = document.getElementById("retryButton");
+    const checks = {
+      face: document.getElementById("faceCheck"),
+      distance: document.getElementById("distanceCheck"),
+      quality: document.getElementById("qualityCheck")
+    };
 
-                const isLookingAway = isLookingAwayYaw || isLookingAwayPitch;
+    let detector;
+    let cameraStream;
+    let animationFrameId;
+    let lastDetectionAt = 0;
+    let inferencePending = false;
+    let captured = false;
+    let validHistory = [];
 
-                // 3. Gaze Check (Iris Tracking)
-                const leftEyeOuter = landmarks[33];
-                const leftEyeInner = landmarks[133];
-                const leftIris = landmarks[468]; 
-                
-                const rightEyeInner = landmarks[362];
-                const rightEyeOuter = landmarks[263];
-                const rightIris = landmarks[473];
+    const STATES = Object.freeze({
+      loading: { message: "Loading face detector…", detail: "This may take a moment on the first visit.", icon: "…", color: "warning" },
+      camera: { message: "Starting the front camera…", detail: "Allow camera access when prompted.", icon: "…", color: "warning" },
+      noFace: { message: "Place your face inside the frame.", detail: "Keep your full face visible.", icon: "!", color: "danger" },
+      multipleFaces: { message: "Only one person should be visible.", detail: "Ask anyone else to move out of the camera view.", icon: "2", color: "danger" },
+      tooFar: { message: "Move closer to the camera.", detail: "Your face is currently too small in the image.", icon: "↑", color: "warning" },
+      tooClose: { message: "Move slightly away.", detail: "Leave a little space around your face.", icon: "↓", color: "warning" },
+      clipped: { message: "Center your face in the frame.", detail: "Make sure your entire face is visible.", icon: "↔", color: "warning" },
+      dark: { message: "Find a brighter place.", detail: "Light your face evenly from the front.", icon: "☀", color: "warning" },
+      bright: { message: "Move away from the strong light.", detail: "Your face is overexposed.", icon: "☀", color: "warning" },
+      blurry: { message: "Hold the phone steady.", detail: "The image is blurry. Clean the lens if needed.", icon: "~", color: "warning" },
+      ready: { message: "Great — hold still.", detail: "Checking a few stable frames before capture.", icon: "✓", color: "success" },
+      captured: { message: "Selfie captured successfully.", detail: "All local quality checks passed.", icon: "✓", color: "success" },
+      unsupported: { message: "Camera access is not supported.", detail: "Try an updated version of Chrome or another browser.", icon: "!", color: "danger" },
+      denied: { message: "Camera access was blocked.", detail: "Enable camera permission in the browser and try again.", icon: "!", color: "danger" },
+      error: { message: "The selfie checker could not start.", detail: "Reload the page and try again.", icon: "!", color: "danger" }
+    });
 
-                const leftEyeWidth = Math.abs(leftEyeInner.x - leftEyeOuter.x);
-                const leftIrisPos = Math.abs(leftIris.x - leftEyeOuter.x) / leftEyeWidth;
-                
-                const rightEyeWidth = Math.abs(rightEyeInner.x - rightEyeOuter.x);
-                const rightIrisPos = Math.abs(rightIris.x - rightEyeInner.x) / rightEyeWidth;
-                
-                const isLookingSideways = leftIrisPos < 0.25 || leftIrisPos > 0.75 || rightIrisPos < 0.25 || rightIrisPos > 0.75;
+    function applyState(name, checkState = {}) {
+      const state = STATES[name];
+      instruction.textContent = state.message;
+      detail.textContent = state.detail;
+      statusIcon.textContent = state.icon;
 
-                // Evaluate Conditions (Priority order)
-                if (faceArea < 0.18) {
-                    feedbackMsg = "Please move your face closer to the camera.";
-                } else if (isLookingAway || isLookingSideways) {
-                    feedbackMsg = "Please look directly at the camera.";
-                } else {
-                    allConditionsMet = true;
-                    feedbackMsg = "Perfect! Hold still...";
-                    msgColor = "#4CAF50"; 
-                }
-            }
+      const colors = {
+        warning: { strong: "#ffb547", soft: "rgba(255,181,71,0.18)" },
+        success: { strong: "#35c77a", soft: "rgba(53,199,122,0.18)" },
+        danger: { strong: "#ff5f66", soft: "rgba(255,95,102,0.18)" }
+      };
+      document.documentElement.style.setProperty("--ring", colors[state.color].strong);
+      document.documentElement.style.setProperty("--ring-soft", colors[state.color].soft);
 
-            canvasCtx.restore();
-            instructionText.innerText = feedbackMsg;
-            instructionText.style.color = msgColor;
+      for (const [key, element] of Object.entries(checks)) {
+        element.classList.remove("pass", "fail");
+        if (checkState[key] === true) element.classList.add("pass");
+        if (checkState[key] === false) element.classList.add("fail");
+      }
+    }
 
-            // Auto-Capture Logic
-            if (allConditionsMet) {
-                validFrameCount++;
-                canvasElement.classList.add('success-canvas');
-            } else {
-                validFrameCount = 0;
-                canvasElement.classList.remove('success-canvas');
-            }
+    function normalizeBox(detection) {
+      const box = detection && detection.boundingBox;
+      if (!box) return null;
 
-            progressBar.style.width = `${Math.min((validFrameCount / FRAMES_TO_CAPTURE) * 100, 100)}%`;
+      if (Number.isFinite(box.xCenter)) {
+        return {
+          x: box.xCenter - box.width / 2,
+          y: box.yCenter - box.height / 2,
+          width: box.width,
+          height: box.height
+        };
+      }
 
-            if (validFrameCount >= FRAMES_TO_CAPTURE) {
-                isCaptured = true;
-                instructionText.innerText = "Selfie Captured Successfully!";
-            }
+      if (Number.isFinite(box.xmin)) {
+        return { x: box.xmin, y: box.ymin, width: box.width, height: box.height };
+      }
+
+      return null;
+    }
+
+    function faceMetrics(box) {
+      const sourceWidth = video.videoWidth;
+      const sourceHeight = video.videoHeight;
+      const paddingX = box.width * 0.08;
+      const paddingY = box.height * 0.08;
+      const sx = Math.max(0, (box.x - paddingX) * sourceWidth);
+      const sy = Math.max(0, (box.y - paddingY) * sourceHeight);
+      const sw = Math.min(sourceWidth - sx, (box.width + paddingX * 2) * sourceWidth);
+      const sh = Math.min(sourceHeight - sy, (box.height + paddingY * 2) * sourceHeight);
+
+      analysisContext.drawImage(video, sx, sy, sw, sh, 0, 0, CONFIG.analysisSize, CONFIG.analysisSize);
+      const pixels = analysisContext.getImageData(0, 0, CONFIG.analysisSize, CONFIG.analysisSize).data;
+      const count = CONFIG.analysisSize * CONFIG.analysisSize;
+      const gray = new Float32Array(count);
+      let brightnessTotal = 0;
+
+      for (let pixel = 0, index = 0; pixel < pixels.length; pixel += 4, index += 1) {
+        const value = 0.299 * pixels[pixel] + 0.587 * pixels[pixel + 1] + 0.114 * pixels[pixel + 2];
+        gray[index] = value;
+        brightnessTotal += value;
+      }
+
+      let laplacianTotal = 0;
+      let laplacianSquaredTotal = 0;
+      let laplacianCount = 0;
+      const size = CONFIG.analysisSize;
+
+      for (let y = 1; y < size - 1; y += 1) {
+        for (let x = 1; x < size - 1; x += 1) {
+          const index = y * size + x;
+          const value = gray[index - 1] + gray[index + 1] + gray[index - size] + gray[index + size] - 4 * gray[index];
+          laplacianTotal += value;
+          laplacianSquaredTotal += value * value;
+          laplacianCount += 1;
         }
+      }
 
-        const faceMesh = new FaceMesh({locateFile: (file) => {
-            return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
-        }});
-        
-        faceMesh.setOptions({
-            selfieMode: true, 
-            maxNumFaces: 2, 
-            refineLandmarks: true,
-            minDetectionConfidence: 0.5,
-            minTrackingConfidence: 0.5
-        });
-        
-        faceMesh.onResults(onResults);
+      const laplacianMean = laplacianTotal / laplacianCount;
+      return {
+        brightness: brightnessTotal / count,
+        sharpness: laplacianSquaredTotal / laplacianCount - laplacianMean * laplacianMean
+      };
+    }
 
-        const camera = new Camera(videoElement, {
-            onFrame: async () => { await faceMesh.send({image: videoElement}); },
-            width: 480, height: 480
+    function recordValidity(isValid) {
+      validHistory.push(isValid);
+      if (validHistory.length > CONFIG.historySize) validHistory.shift();
+
+      const validSamples = validHistory.filter(Boolean).length;
+      const percentage = Math.min(100, Math.round(validSamples / CONFIG.requiredValidSamples * 100));
+      progress.style.width = `${percentage}%`;
+
+      return validHistory.length === CONFIG.historySize && validSamples >= CONFIG.requiredValidSamples;
+    }
+
+    function invalidate() {
+      recordValidity(false);
+    }
+
+    function onResults(results) {
+      if (captured || !cameraStream) return;
+
+      const detections = Array.isArray(results.detections) ? results.detections : [];
+
+      if (detections.length === 0) {
+        invalidate();
+        applyState("noFace", { face: false });
+        return;
+      }
+
+      if (detections.length > 1) {
+        invalidate();
+        applyState("multipleFaces", { face: false });
+        return;
+      }
+
+      const box = normalizeBox(detections[0]);
+      if (!box) {
+        invalidate();
+        applyState("error", { face: false });
+        return;
+      }
+
+      const facePass = true;
+      if (box.height < CONFIG.minFaceHeightRatio) {
+        invalidate();
+        applyState("tooFar", { face: facePass, distance: false });
+        return;
+      }
+
+      if (box.height > CONFIG.maxFaceHeightRatio) {
+        invalidate();
+        applyState("tooClose", { face: facePass, distance: false });
+        return;
+      }
+
+      const margin = CONFIG.minEdgeMarginRatio;
+      const isClipped = box.x < margin || box.y < margin || box.x + box.width > 1 - margin || box.y + box.height > 1 - margin;
+      if (isClipped) {
+        invalidate();
+        applyState("clipped", { face: facePass, distance: false });
+        return;
+      }
+
+      const metrics = faceMetrics(box);
+      if (metrics.brightness < CONFIG.minBrightness) {
+        invalidate();
+        applyState("dark", { face: facePass, distance: true, quality: false });
+        return;
+      }
+
+      if (metrics.brightness > CONFIG.maxBrightness) {
+        invalidate();
+        applyState("bright", { face: facePass, distance: true, quality: false });
+        return;
+      }
+
+      if (metrics.sharpness < CONFIG.minSharpness) {
+        invalidate();
+        applyState("blurry", { face: facePass, distance: true, quality: false });
+        return;
+      }
+
+      applyState("ready", { face: true, distance: true, quality: true });
+      if (recordValidity(true)) captureSelfie();
+    }
+
+    async function detectionLoop(timestamp) {
+      if (captured || !cameraStream) return;
+
+      if (
+        detector &&
+        video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA &&
+        !inferencePending &&
+        timestamp - lastDetectionAt >= CONFIG.detectionIntervalMs
+      ) {
+        lastDetectionAt = timestamp;
+        inferencePending = true;
+        try {
+          await detector.send({ image: video });
+        } catch (error) {
+          console.error("Face detection failed", error);
+        } finally {
+          inferencePending = false;
+        }
+      }
+
+      animationFrameId = requestAnimationFrame(detectionLoop);
+    }
+
+    function stopCamera() {
+      if (animationFrameId) cancelAnimationFrame(animationFrameId);
+      animationFrameId = undefined;
+      if (cameraStream) cameraStream.getTracks().forEach((track) => track.stop());
+      cameraStream = undefined;
+      video.srcObject = null;
+    }
+
+    function captureSelfie() {
+      if (captured || !video.videoWidth || !video.videoHeight) return;
+      captured = true;
+
+      captureCanvas.width = video.videoWidth;
+      captureCanvas.height = video.videoHeight;
+      const context = captureCanvas.getContext("2d");
+      context.save();
+      context.translate(captureCanvas.width, 0);
+      context.scale(-1, 1);
+      context.drawImage(video, 0, 0, captureCanvas.width, captureCanvas.height);
+      context.restore();
+
+      capturedImage.src = captureCanvas.toDataURL("image/jpeg", 0.9);
+      viewfinder.classList.add("captured");
+      retryButton.hidden = false;
+      progress.style.width = "100%";
+      applyState("captured", { face: true, distance: true, quality: true });
+      stopCamera();
+    }
+
+    async function startCamera() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        applyState("unsupported");
+        return;
+      }
+
+      applyState("camera");
+      retryButton.disabled = true;
+      try {
+        cameraStream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: {
+            facingMode: { ideal: "user" },
+            width: { ideal: 480, max: 640 },
+            height: { ideal: 640, max: 720 },
+            frameRate: { ideal: 24, max: 30 }
+          }
         });
-        camera.start();
-    </script>
+        video.srcObject = cameraStream;
+        await video.play();
+        retryButton.disabled = false;
+        applyState("noFace");
+        animationFrameId = requestAnimationFrame(detectionLoop);
+      } catch (error) {
+        console.error("Camera start failed", error);
+        retryButton.disabled = false;
+        applyState(error && (error.name === "NotAllowedError" || error.name === "SecurityError") ? "denied" : "error");
+      }
+    }
+
+    async function initialize() {
+      applyState("loading");
+      try {
+        detector = new FaceDetection({
+          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection@0.4/${file}`
+        });
+        detector.setOptions({
+          model: "short",
+          selfieMode: false,
+          minDetectionConfidence: CONFIG.minDetectionConfidence
+        });
+        detector.onResults(onResults);
+        if (typeof detector.initialize === "function") await detector.initialize();
+        await startCamera();
+      } catch (error) {
+        console.error("Initialization failed", error);
+        applyState("error");
+      }
+    }
+
+    retryButton.addEventListener("click", async () => {
+      stopCamera();
+      captured = false;
+      validHistory = [];
+      progress.style.width = "0";
+      capturedImage.removeAttribute("src");
+      viewfinder.classList.remove("captured");
+      retryButton.hidden = true;
+      await startCamera();
+    });
+
+    window.addEventListener("beforeunload", stopCamera);
+    window.addEventListener("load", initialize, { once: true });
+  </script>
 </body>
 </html>
