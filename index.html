@@ -95,6 +95,8 @@
       transform: scaleX(-1);
     }
 
+    .viewfinder.simulate-blur video { filter: blur(7px); }
+
     #capturedImage {
       display: none;
     }
@@ -215,7 +217,7 @@
 
     .checks {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(2, 1fr);
       gap: 8px;
       margin-top: 16px;
     }
@@ -259,6 +261,41 @@
 
     button[hidden] { display: none; }
     button:disabled { cursor: wait; opacity: 0.62; }
+
+    .debug-controls {
+      margin-top: 14px;
+      padding: 12px;
+      border: 1px dashed rgba(255,181,71,0.4);
+      border-radius: 14px;
+      background: rgba(255,181,71,0.06);
+    }
+
+    .debug-controls[hidden] { display: none; }
+
+    .debug-label,
+    .debug-readout {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.74rem;
+      line-height: 1.45;
+    }
+
+    .debug-label {
+      color: var(--warning);
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .debug-readout { margin-top: 4px; }
+
+    .debug-controls button {
+      margin-top: 10px;
+      padding: 10px 12px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: var(--surface-2);
+      font-size: 0.82rem;
+    }
 
     .technical-note {
       margin: 14px 6px 0;
@@ -311,10 +348,17 @@
         <div class="checks" aria-label="Selfie quality checks">
           <div class="check" id="faceCheck">One face</div>
           <div class="check" id="distanceCheck">Distance</div>
+          <div class="check" id="angleCheck">Face angle</div>
           <div class="check" id="qualityCheck">Quality</div>
         </div>
 
         <button type="button" id="retryButton" hidden>Retake selfie</button>
+
+        <div class="debug-controls" id="debugControls" hidden>
+          <p class="debug-label">Test mode</p>
+          <p class="debug-readout" id="debugReadout">Waiting for a face…</p>
+          <button type="button" id="blurTestButton" aria-pressed="false">Simulate blur: Off</button>
+        </div>
       </div>
     </section>
 
@@ -338,6 +382,10 @@
       minSharpness: 80,
       minBrightness: 42,
       maxBrightness: 218,
+      maxYawRatio: 0.22,
+      minPitchRatio: 0.32,
+      maxPitchRatio: 0.74,
+      simulatedBlurRadius: 5,
       historySize: 6,
       requiredValidSamples: 5
     });
@@ -353,11 +401,17 @@
     const statusIcon = document.getElementById("statusIcon");
     const progress = document.getElementById("progress");
     const retryButton = document.getElementById("retryButton");
+    const debugControls = document.getElementById("debugControls");
+    const debugReadout = document.getElementById("debugReadout");
+    const blurTestButton = document.getElementById("blurTestButton");
     const checks = {
       face: document.getElementById("faceCheck"),
       distance: document.getElementById("distanceCheck"),
+      angle: document.getElementById("angleCheck"),
       quality: document.getElementById("qualityCheck")
     };
+
+    const debugParameter = new URLSearchParams(window.location.search).get("debug");
 
     let detector;
     let cameraStream;
@@ -366,6 +420,7 @@
     let inferencePending = false;
     let captured = false;
     let validHistory = [];
+    let simulateBlur = debugParameter === "blur";
 
     const STATES = Object.freeze({
       loading: { message: "Loading face detector…", detail: "This may take a moment on the first visit.", icon: "…", color: "warning" },
@@ -375,6 +430,7 @@
       tooFar: { message: "Move closer to the camera.", detail: "Your face is currently too small in the image.", icon: "↑", color: "warning" },
       tooClose: { message: "Move slightly away.", detail: "Leave a little space around your face.", icon: "↓", color: "warning" },
       clipped: { message: "Center your face in the frame.", detail: "Make sure your entire face is visible.", icon: "↔", color: "warning" },
+      angle: { message: "Look straight at the camera.", detail: "Keep your face front-on, not turned sideways or looking up or down.", icon: "◎", color: "warning" },
       dark: { message: "Find a brighter place.", detail: "Light your face evenly from the front.", icon: "☀", color: "warning" },
       bright: { message: "Move away from the strong light.", detail: "Your face is overexposed.", icon: "☀", color: "warning" },
       blurry: { message: "Hold the phone steady.", detail: "The image is blurry. Clean the lens if needed.", icon: "~", color: "warning" },
@@ -426,6 +482,63 @@
       return null;
     }
 
+    function headPoseMetrics(detection) {
+      const landmarks = detection && detection.landmarks;
+      if (!Array.isArray(landmarks) || landmarks.length < 4) return null;
+
+      // MediaPipe order: right eye, left eye, nose tip, mouth center.
+      const rightEye = landmarks[0];
+      const leftEye = landmarks[1];
+      const nose = landmarks[2];
+      const mouth = landmarks[3];
+      const eyeMidpoint = {
+        x: (rightEye.x + leftEye.x) / 2,
+        y: (rightEye.y + leftEye.y) / 2
+      };
+      const eyeSpan = Math.hypot(leftEye.x - rightEye.x, leftEye.y - rightEye.y);
+      const eyeToMouth = mouth.y - eyeMidpoint.y;
+
+      if (eyeSpan < 0.001 || eyeToMouth < 0.001) return null;
+
+      return {
+        yawRatio: (nose.x - eyeMidpoint.x) / eyeSpan,
+        pitchRatio: (nose.y - eyeMidpoint.y) / eyeToMouth
+      };
+    }
+
+    function boxBlurGray(input, size, radius) {
+      const temporary = new Float32Array(input.length);
+      const output = new Float32Array(input.length);
+      const windowSize = radius * 2 + 1;
+
+      for (let y = 0; y < size; y += 1) {
+        const row = y * size;
+        let sum = 0;
+        for (let offset = -radius; offset <= radius; offset += 1) {
+          sum += input[row + Math.max(0, Math.min(size - 1, offset))];
+        }
+        for (let x = 0; x < size; x += 1) {
+          temporary[row + x] = sum / windowSize;
+          sum += input[row + Math.min(size - 1, x + radius + 1)];
+          sum -= input[row + Math.max(0, x - radius)];
+        }
+      }
+
+      for (let x = 0; x < size; x += 1) {
+        let sum = 0;
+        for (let offset = -radius; offset <= radius; offset += 1) {
+          sum += temporary[Math.max(0, Math.min(size - 1, offset)) * size + x];
+        }
+        for (let y = 0; y < size; y += 1) {
+          output[y * size + x] = sum / windowSize;
+          sum += temporary[Math.min(size - 1, y + radius + 1) * size + x];
+          sum -= temporary[Math.max(0, y - radius) * size + x];
+        }
+      }
+
+      return output;
+    }
+
     function faceMetrics(box) {
       const sourceWidth = video.videoWidth;
       const sourceHeight = video.videoHeight;
@@ -448,6 +561,12 @@
         brightnessTotal += value;
       }
 
+      let sharpnessPixels = gray;
+      if (simulateBlur) {
+        // Two lightweight box-blur passes make the test deterministic even on very textured frames.
+        sharpnessPixels = boxBlurGray(gray, CONFIG.analysisSize, CONFIG.simulatedBlurRadius);
+        sharpnessPixels = boxBlurGray(sharpnessPixels, CONFIG.analysisSize, CONFIG.simulatedBlurRadius);
+      }
       let laplacianTotal = 0;
       let laplacianSquaredTotal = 0;
       let laplacianCount = 0;
@@ -456,7 +575,7 @@
       for (let y = 1; y < size - 1; y += 1) {
         for (let x = 1; x < size - 1; x += 1) {
           const index = y * size + x;
-          const value = gray[index - 1] + gray[index + 1] + gray[index - size] + gray[index + size] - 4 * gray[index];
+          const value = sharpnessPixels[index - 1] + sharpnessPixels[index + 1] + sharpnessPixels[index - size] + sharpnessPixels[index + size] - 4 * sharpnessPixels[index];
           laplacianTotal += value;
           laplacianSquaredTotal += value * value;
           laplacianCount += 1;
@@ -485,6 +604,20 @@
       recordValidity(false);
     }
 
+    function updateDebugReadout(metrics, pose) {
+      if (debugParameter === null) return;
+      const parts = [];
+      if (metrics) {
+        parts.push(`sharpness ${metrics.sharpness.toFixed(0)}`);
+        parts.push(`light ${metrics.brightness.toFixed(0)}`);
+      }
+      if (pose) {
+        parts.push(`yaw ${pose.yawRatio.toFixed(2)}`);
+        parts.push(`pitch ${pose.pitchRatio.toFixed(2)}`);
+      }
+      debugReadout.textContent = parts.length ? parts.join(" · ") : "Waiting for a face…";
+    }
+
     function onResults(results) {
       if (captured || !cameraStream) return;
 
@@ -492,12 +625,14 @@
 
       if (detections.length === 0) {
         invalidate();
+        updateDebugReadout(null, null);
         applyState("noFace", { face: false });
         return;
       }
 
       if (detections.length > 1) {
         invalidate();
+        updateDebugReadout(null, null);
         applyState("multipleFaces", { face: false });
         return;
       }
@@ -530,26 +665,39 @@
         return;
       }
 
+      const pose = headPoseMetrics(detections[0]);
+      const anglePass = pose &&
+        Math.abs(pose.yawRatio) <= CONFIG.maxYawRatio &&
+        pose.pitchRatio >= CONFIG.minPitchRatio &&
+        pose.pitchRatio <= CONFIG.maxPitchRatio;
+      if (!anglePass) {
+        invalidate();
+        updateDebugReadout(null, pose);
+        applyState("angle", { face: facePass, distance: true, angle: false });
+        return;
+      }
+
       const metrics = faceMetrics(box);
+      updateDebugReadout(metrics, pose);
       if (metrics.brightness < CONFIG.minBrightness) {
         invalidate();
-        applyState("dark", { face: facePass, distance: true, quality: false });
+        applyState("dark", { face: facePass, distance: true, angle: true, quality: false });
         return;
       }
 
       if (metrics.brightness > CONFIG.maxBrightness) {
         invalidate();
-        applyState("bright", { face: facePass, distance: true, quality: false });
+        applyState("bright", { face: facePass, distance: true, angle: true, quality: false });
         return;
       }
 
       if (metrics.sharpness < CONFIG.minSharpness) {
         invalidate();
-        applyState("blurry", { face: facePass, distance: true, quality: false });
+        applyState("blurry", { face: facePass, distance: true, angle: true, quality: false });
         return;
       }
 
-      applyState("ready", { face: true, distance: true, quality: true });
+      applyState("ready", { face: true, distance: true, angle: true, quality: true });
       if (recordValidity(true)) captureSelfie();
     }
 
@@ -601,7 +749,7 @@
       viewfinder.classList.add("captured");
       retryButton.hidden = false;
       progress.style.width = "100%";
-      applyState("captured", { face: true, distance: true, quality: true });
+      applyState("captured", { face: true, distance: true, angle: true, quality: true });
       stopCamera();
     }
 
@@ -664,6 +812,24 @@
       viewfinder.classList.remove("captured");
       retryButton.hidden = true;
       await startCamera();
+    });
+
+    function renderBlurTestState() {
+      viewfinder.classList.toggle("simulate-blur", simulateBlur);
+      blurTestButton.setAttribute("aria-pressed", String(simulateBlur));
+      blurTestButton.textContent = `Simulate blur: ${simulateBlur ? "On" : "Off"}`;
+    }
+
+    if (debugParameter !== null) {
+      debugControls.hidden = false;
+      renderBlurTestState();
+    }
+
+    blurTestButton.addEventListener("click", () => {
+      simulateBlur = !simulateBlur;
+      validHistory = [];
+      progress.style.width = "0";
+      renderBlurTestState();
     });
 
     window.addEventListener("beforeunload", stopCamera);
