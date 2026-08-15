@@ -6,7 +6,7 @@ A static, browser-only selfie quality gate designed for low-end and older Androi
 
 - Exactly one face is visible
 - The face is close enough and fully inside the frame
-- The face is looking approximately straight ahead (yaw and pitch heuristic)
+- The face is upright and looking approximately straight ahead (roll, yaw, and pitch heuristics)
 - The face crop has acceptable sharpness
 - The face crop is not severely under- or overexposed
 - Eye-region visibility is shown as a non-blocking advisory
@@ -25,7 +25,7 @@ Then open `http://localhost:8000`.
 
 ## Test blur and head angle
 
-Append `?debug=1` to the page URL to reveal local test controls and live values for sharpness, brightness, eye-region contrast/edge strength, yaw, and pitch. The **Simulate blur** switch blurs only the 128×128 analysis crop, so it tests the quality gate without changing or uploading the camera stream.
+Append `?debug=1` to the page URL to reveal local test controls and live values for sharpness, brightness, eye-region contrast/edge strength, yaw, pitch, and roll. The **Simulate blur** switch blurs only the 128×128 analysis crop, so it tests the quality gate without changing or uploading the camera stream.
 
 Append `?debug=blur` to start with simulated blur already enabled. For production, use:
 
@@ -50,9 +50,9 @@ The initial values are deliberately conservative starting points. Validate them 
 
 The `minSharpness` value uses variance of a four-neighbor Laplacian over a standardized 128×128 grayscale face crop. It should be calibrated from labeled sharp and blurred samples captured on target phones.
 
-The head-angle gate intentionally reuses BlazeFace's six existing landmarks. `maxYawRatio`, `minPitchRatio`, and `maxPitchRatio` are normalized heuristics rather than degree measurements. This keeps the page light, but the thresholds should be calibrated on representative faces and phones. If precise pose angles become a requirement, use a denser face-landmark model instead.
+The head-angle gate intentionally reuses BlazeFace's six existing landmarks. Roll is measured from the eye-line angle and limited by `maxRollDegrees`. Yaw and pitch are calculated after rotating the nose and mouth into an eye-aligned coordinate system, which prevents head tilt from distorting them. Yaw and pitch remain normalized heuristics rather than degree measurements. Calibrate all thresholds on representative faces and phones; use a denser face-landmark model if precise pose angles become a requirement.
 
-The eye advisory samples contrast and edge strength around BlazeFace's two eye coordinates. It does not determine whether eyes are open and it never blocks capture or changes validity history. `minEyeContrast` and `minEyeEdgeStrength` are deliberately conservative starting points; false warnings should be measured across lighting conditions, skin tones, glasses, makeup, and target cameras before tightening them.
+The **Eye-area detail** advisory samples contrast and edge strength around BlazeFace's two eye coordinates. It does not determine whether eyes are open or where they are looking, and it never blocks capture or changes validity history. `minEyeContrast` and `minEyeEdgeStrength` are deliberately conservative starting points; false warnings should be measured across lighting conditions, skin tones, glasses, makeup, and target cameras before tightening them.
 
 ## Production
 
